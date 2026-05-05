@@ -569,7 +569,7 @@ public:
                 case 12: {
                     int a = mem[pc++];
                     if (a < 0 || a >= (int)mem.size()) throw runtime_error("Endereço INPUT inválido");
-                    cout << "INPUT: ";
+                    cout << "INPUT (endereço " << a << "): ";
                     cin >> mem[a];
                     break;
                 }
