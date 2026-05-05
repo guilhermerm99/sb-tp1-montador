@@ -288,10 +288,19 @@ private:
         for (size_t i = 1; i < tokens.size(); ++i)
             info.operands.push_back(tokens[i]);
 
-        // Validação do COPY: precisa ter vírgula na linha original
+        // Validação rigorosa do COPY: vírgula sem espaços
         if (info.instruction == "COPY") {
-            if (temp.find(',') == string::npos)
+            size_t comma = temp.find(',');
+            if (comma == string::npos)
                 throw runtime_error("COPY requer vírgula entre os operandos");
+            // Verifica se há caracteres de espaço imediatamente antes ou depois da vírgula
+            if (comma > 0 && isspace(temp[comma-1]))
+                throw runtime_error("COPY não deve ter espaço antes da vírgula");
+            if (comma + 1 < temp.size() && isspace(temp[comma+1]))
+                throw runtime_error("COPY não deve ter espaço depois da vírgula");
+            // Verifica se há mais de uma vírgula
+            if (temp.find(',', comma+1) != string::npos)
+                throw runtime_error("COPY deve ter exatamente uma vírgula");
         }
 
         parsedLines.push_back(info);
@@ -483,6 +492,7 @@ private:
             if (i > 0) penOut << " ";
             penOut << penCode[i];
         }
+        penOut << "\n";  // newline final
         penOut.close();
     }
 
@@ -502,6 +512,7 @@ public:
             if (i > 0) objOut << " ";
             objOut << objectCode[i];
         }
+        objOut << "\n";  // newline final
         objOut.close();
 
         // .pen (simulação de passagem única)
@@ -557,8 +568,8 @@ public:
                 case 11: { int a = mem[pc++]; if (a<0||a>=(int)mem.size()) throw runtime_error("Acesso inválido"); mem[a] = acc; break; }
                 case 12: {
                     int a = mem[pc++];
-                    if (a<0||a>=(int)mem.size()) throw runtime_error("Endereço INPUT inválido");
-                    cout << "INPUT (endereço " << a << "): ";
+                    if (a < 0 || a >= (int)mem.size()) throw runtime_error("Endereço INPUT inválido");
+                    cout << "INPUT: ";
                     cin >> mem[a];
                     break;
                 }
