@@ -38,7 +38,7 @@ vector<string> tokenize(const string& line) {
     return tokens;
 }
 
-// Tokenizador especial para o pré-processador (mantém vírgulas)
+// Tokenizador especial para o pré-processador (mantém vírgulas como token separado)
 vector<string> preTokenize(const string& line) {
     vector<string> tokens;
     string buf;
@@ -143,10 +143,19 @@ public:
             line = toUpper(line);
 
             if (!pendingLabel.empty()) {
-                line = pendingLabel + " " + line;
-                pendingLabel.clear();
+                // Não junta rótulo com SECTION
+                if (line.find("SECTION") == 0) {
+                    string labelOnly = pendingLabel;
+                    pendingLabel.clear();
+                    labelOnly = trim(labelOnly);
+                    if (section == "TEXT") textLines.push_back(labelOnly);
+                    else if (section == "DATA") dataLines.push_back(labelOnly);
+                    // A linha atual (SECTION) será processada normalmente em seguida
+                } else {
+                    line = pendingLabel + " " + line;
+                    pendingLabel.clear();
+                }
             }
-
             if (line.back() == ':') {
                 stringstream ss(line);
                 string lbl;
@@ -191,30 +200,28 @@ public:
                 continue;
             }
 
-            // Substituição de EQU (mantendo vírgulas)
-            string processedLine;
-            for (const string& tok : ptokens) {
-                if (tok == ",") {
-                    processedLine += ",";
-                    continue;
-                }
+            // Substituição de EQU — varre a linha respeitando delimitadores
+            string processedLine = line;
+            // Ordena símbolos por tamanho decrescente para evitar conflitos
+            vector<pair<string, int>> sortedEqu(equTable.begin(), equTable.end());
+            sort(sortedEqu.begin(), sortedEqu.end(), [](auto& a, auto& b) {
+                return a.first.size() > b.first.size();
+            });
 
-                string base = tok;
-                string offStr;
-                size_t plus = tok.find('+');
-                if (plus != string::npos) {
-                    base = tok.substr(0, plus);
-                    offStr = tok.substr(plus);
-                }
-
-                if (equTable.count(base) && base != "EQU" && base != "IF") {
-                    if (!processedLine.empty() && processedLine.back() != ',')
-                        processedLine += " ";
-                    processedLine += to_string(equTable[base]) + offStr;
-                } else {
-                    if (!processedLine.empty() && processedLine.back() != ',')
-                        processedLine += " ";
-                    processedLine += tok;
+            for (const auto& eq : sortedEqu) {
+                const string& key = eq.first;
+                string val = to_string(eq.second);
+                size_t pos = 0;
+                while ((pos = processedLine.find(key, pos)) != string::npos) {
+                    bool leftOk = (pos == 0 || !isalnum(processedLine[pos-1]) && processedLine[pos-1] != '_');
+                    bool rightOk = (pos + key.size() >= processedLine.size() ||
+                                    !isalnum(processedLine[pos + key.size()]) && processedLine[pos + key.size()] != '_');
+                    if (leftOk && rightOk) {
+                        processedLine.replace(pos, key.size(), val);
+                        pos += val.size();
+                    } else {
+                        pos++;
+                    }
                 }
             }
 
@@ -293,12 +300,10 @@ private:
             size_t comma = temp.find(',');
             if (comma == string::npos)
                 throw runtime_error("COPY requer vírgula entre os operandos");
-            // Verifica se há caracteres de espaço imediatamente antes ou depois da vírgula
             if (comma > 0 && isspace(temp[comma-1]))
                 throw runtime_error("COPY não deve ter espaço antes da vírgula");
             if (comma + 1 < temp.size() && isspace(temp[comma+1]))
                 throw runtime_error("COPY não deve ter espaço depois da vírgula");
-            // Verifica se há mais de uma vírgula
             if (temp.find(',', comma+1) != string::npos)
                 throw runtime_error("COPY deve ter exatamente uma vírgula");
         }
@@ -436,12 +441,11 @@ private:
     // Simula passagem única para gerar o .pen
     void generatePen(const string& penFile) {
         vector<int> penCode;
-        map<string, int> localSymTable;     // símbolos já definidos (endereço)
+        map<string, int> localSymTable;
         vector<pair<int, string>> localPendencies;
 
         int lc = 0;
         for (const auto& info : parsedLines) {
-            // Rótulo definido aqui
             if (!info.label.empty()) {
                 localSymTable[info.label] = lc;
             }
@@ -472,11 +476,9 @@ private:
                     if (isNumber(label)) {
                         penCode.push_back(strToInt(label));
                     } else {
-                        // Símbolo: já foi definido até aqui?
                         if (localSymTable.count(label)) {
                             penCode.push_back(localSymTable[label] + offset);
                         } else {
-                            // Pendência!
                             penCode.push_back(-1);
                             localPendencies.push_back({(int)penCode.size()-1, label});
                         }
@@ -486,13 +488,12 @@ private:
             }
         }
 
-        // Grava o .pen com -1 nos locais pendentes
         ofstream penOut(penFile);
         for (size_t i = 0; i < penCode.size(); ++i) {
             if (i > 0) penOut << " ";
             penOut << penCode[i];
         }
-        penOut << "\n";  // newline final
+        penOut << "\n";
         penOut.close();
     }
 
@@ -512,10 +513,10 @@ public:
             if (i > 0) objOut << " ";
             objOut << objectCode[i];
         }
-        objOut << "\n";  // newline final
+        objOut << "\n";
         objOut.close();
 
-        // .pen (simulação de passagem única)
+        // .pen
         generatePen(penFile);
 
         cout << "[ASM] Montagem concluída: " << objFile << ", " << penFile << endl;
@@ -568,7 +569,7 @@ public:
                 case 11: { int a = mem[pc++]; if (a<0||a>=(int)mem.size()) throw runtime_error("Acesso inválido"); mem[a] = acc; break; }
                 case 12: {
                     int a = mem[pc++];
-                    if (a < 0 || a >= (int)mem.size()) throw runtime_error("Endereço INPUT inválido");
+                    if (a<0||a>=(int)mem.size()) throw runtime_error("Endereço INPUT inválido");
                     cout << "INPUT (endereço " << a << "): ";
                     cin >> mem[a];
                     break;
