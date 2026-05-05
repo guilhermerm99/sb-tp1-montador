@@ -172,7 +172,7 @@ public:
             }
 
             // IF
-            vector<string> ptokens = preTokenize(line); // usa tokenizador que mantém vírgulas
+            vector<string> ptokens = preTokenize(line);
             if (!ptokens.empty() && ptokens[0] == "IF") {
                 if (ptokens.size() != 2) throw runtime_error("IF requer exatamente um argumento");
                 string token = ptokens[1];
@@ -288,7 +288,7 @@ private:
         for (size_t i = 1; i < tokens.size(); ++i)
             info.operands.push_back(tokens[i]);
 
-        // Validação do COPY: precisa ter vírgula na linha original (antes de tokenizar)
+        // Validação do COPY: precisa ter vírgula na linha original
         if (info.instruction == "COPY") {
             if (temp.find(',') == string::npos)
                 throw runtime_error("COPY requer vírgula entre os operandos");
@@ -413,15 +413,77 @@ private:
             }
         }
 
+        // Backpatching (resolve pendências)
         for (auto& p : pendencies) {
             int pos = p.first;
             string sym = p.second;
-            if (symTable.count(sym) && symTable[sym].second) {
+            if (symTable.count(sym) && symTable[sym].second)
                 objectCode[pos] = symTable[sym].first;
-            } else {
+            else
                 throw runtime_error("Pendência não resolvida: símbolo " + sym + " continua indefinido");
+        }
+    }
+
+    // Simula passagem única para gerar o .pen
+    void generatePen(const string& penFile) {
+        vector<int> penCode;
+        map<string, int> localSymTable;     // símbolos já definidos (endereço)
+        vector<pair<int, string>> localPendencies;
+
+        int lc = 0;
+        for (const auto& info : parsedLines) {
+            // Rótulo definido aqui
+            if (!info.label.empty()) {
+                localSymTable[info.label] = lc;
+            }
+            if (info.instruction.empty()) continue;
+
+            string instr = info.instruction;
+            if (instr == "CONST") {
+                penCode.push_back(strToInt(info.operands[0]));
+                lc++;
+            } else if (instr == "SPACE") {
+                int size = 1;
+                if (!info.operands.empty()) size = strToInt(info.operands[0]);
+                for (int i = 0; i < size; i++) penCode.push_back(0);
+                lc += size;
+            } else if (opcodeTable.count(instr)) {
+                penCode.push_back(opcodeTable.at(instr));
+                lc++;
+                for (const string& op : info.operands) {
+                    string label = op;
+                    int offset = 0;
+                    size_t plus = label.find('+');
+                    if (plus != string::npos) {
+                        string offStr = trim(label.substr(plus+1));
+                        offset = strToInt(offStr);
+                        label = trim(label.substr(0, plus));
+                    }
+
+                    if (isNumber(label)) {
+                        penCode.push_back(strToInt(label));
+                    } else {
+                        // Símbolo: já foi definido até aqui?
+                        if (localSymTable.count(label)) {
+                            penCode.push_back(localSymTable[label] + offset);
+                        } else {
+                            // Pendência!
+                            penCode.push_back(-1);
+                            localPendencies.push_back({(int)penCode.size()-1, label});
+                        }
+                    }
+                    lc++;
+                }
             }
         }
+
+        // Grava o .pen com -1 nos locais pendentes
+        ofstream penOut(penFile);
+        for (size_t i = 0; i < penCode.size(); ++i) {
+            if (i > 0) penOut << " ";
+            penOut << penCode[i];
+        }
+        penOut.close();
     }
 
 public:
@@ -442,15 +504,8 @@ public:
         }
         objOut.close();
 
-        // .pen
-        ofstream penOut(penFile);
-        vector<int> penCode = objectCode;
-        for (const auto& p : pendencies) penCode[p.first] = -1;
-        for (size_t i = 0; i < penCode.size(); ++i) {
-            if (i > 0) penOut << " ";
-            penOut << penCode[i];
-        }
-        penOut.close();
+        // .pen (simulação de passagem única)
+        generatePen(penFile);
 
         cout << "[ASM] Montagem concluída: " << objFile << ", " << penFile << endl;
     }
